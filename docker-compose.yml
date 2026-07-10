@@ -1,0 +1,23 @@
+services:
+  carla-server:
+    image: ${CARLA_SERVER_IMAGE:-ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image:0.9.16-sanramon}
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-all}
+      OMP_PROC_BIND: "FALSE"
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-48}
+    ports:
+      - "2000:2000"
+      - "2001:2001"
+      - "2002:2002"
+      - "18000:8000"
+    command:
+      - ./CarlaUE4.sh
+      - -RenderOffScreen
+      - -nosound
+      - -stdout
+      - -FullStdOutLogOutput
+      - -carla-rpc-port=2000
+      - -quality-level=${CARLA_QUALITY_LEVEL:-Epic}
+    restart: unless-stopped
