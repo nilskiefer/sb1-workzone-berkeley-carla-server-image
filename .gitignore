@@ -1,4 +1,3 @@
-.env
-.env.*
-!.env.example
 Dockerfile.carlamayo
+/Place_carla_Folder_in_here/*
+!/Place_carla_Folder_in_here/.gitkeep

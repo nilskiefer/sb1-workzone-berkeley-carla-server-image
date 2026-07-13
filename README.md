@@ -1,76 +1,83 @@
 # CARLA Server Image
 
-Docker packaging for the local CARLA 0.9.16 server runtime used by CarlaMayo.
+CARLA 0.9.16 server image for [CarlaMayo](https://github.berkeley.edu/peggywang/CarlaMayo).
 
-This repository intentionally does not store the CARLA runtime itself. It builds
-from the packaged runtime at `../carla-server/carla`, which currently includes
-the custom `San_Ramon_P1_Roads` map.
+## Use The Released Image
 
-## Build
-
-Copy the sample env file and set the target image:
+Requirements: Linux, Docker, Docker Compose, NVIDIA driver, and NVIDIA
+Container Toolkit.
 
 ```bash
-cp .env.example .env
+git clone https://github.com/nilskiefer/sb1-workzone-berkeley-carla-server-image.git
+cd sb1-workzone-berkeley-carla-server-image
+docker compose pull
+docker compose up -d --wait carla-server
 ```
 
-For GHCR on normal GitHub, use an image name like:
+The released image is:
 
 ```text
-CARLA_SERVER_IMAGE=ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image:0.9.16-sanramon
+ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image:0.9.16-sanramon
 ```
 
-Build the image:
+CARLA is available at `localhost:2000`.
 
 ```bash
-./scripts/build_image.sh
-```
-
-The build context is the CARLA runtime directory, but the Dockerfile is owned by
-this repository.
-
-## Run Locally
-
-```bash
-docker compose up -d carla-server
+docker compose ps
 docker compose logs -f carla-server
+docker compose down
 ```
 
-On a new machine, set `CARLA_SERVER_IMAGE` to the published registry image and
-run the same Compose command. The local CARLA runtime directory is only needed
-for building the image.
+## Build And Publish Your Own Image
 
-The server runs headlessly with `-RenderOffScreen` and exposes:
+Use this only to publish a runtime different from the released image.
 
-- `2000`: CARLA RPC
-- `2001`: streaming
-- `2002`: secondary CARLA port
-- `18000`: container Traffic Manager port `8000`
+1. Place an unpacked CARLA 0.9.16 runtime in:
 
-From CarlaMayo, keep using:
+   ```text
+   Place_carla_Folder_in_here/carla/
+   ├── CarlaUE4.sh
+   ├── CarlaUE4/
+   └── PythonAPI/
+   ```
 
-```bash
-export CARLA_HOST=127.0.0.1
-export CARLA_PORT=2000
-export CARLA_TM_PORT=8000
-```
+2. Choose an image reference in your GitHub Container Registry namespace:
 
-`CARLA_TM_PORT=8000` is intentionally left free on the host so CarlaMayo can
-create its local Traffic Manager without colliding with the container port.
+   ```text
+   ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE:0.9.16
+   ```
 
-## Push
+3. Build it:
 
-Authenticate to GHCR:
+   ```bash
+   ./scripts/build_image.sh \
+     Place_carla_Folder_in_here/carla \
+     ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE:0.9.16
+   ```
 
-```bash
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u nilskiefer --password-stdin
-```
+4. Sign in to GHCR with a GitHub token that has `write:packages`, then push:
 
-The token needs `write:packages`. For private images, consumers need
-`read:packages`.
+   ```bash
+   docker login ghcr.io
+   ./scripts/push_image.sh ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE:0.9.16
+   ```
 
-Push:
+5. To deploy your image on any machine, change the `image:` value in
+   `docker-compose.yml` to your image reference, then run:
 
-```bash
-./scripts/push_image.sh
-```
+   ```bash
+   docker compose pull
+   docker compose up -d --wait carla-server
+   ```
+
+The builder includes every file under the supplied CARLA runtime. The current
+runtime includes the San Ramon map used by CarlaMayo's supplied routes.
+
+## Ports
+
+| Service | Host port |
+|---|---|
+| CARLA RPC | `2000` |
+| CARLA streaming | `2001` |
+| CARLA secondary | `2002` |
+| Container Traffic Manager | `18000` |
