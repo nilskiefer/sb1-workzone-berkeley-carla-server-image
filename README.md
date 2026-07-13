@@ -28,6 +28,8 @@ docker compose logs -f carla-server
 docker compose down
 ```
 
+For running CARLA and CarlaMayo on Berkeley Savio, see [SAVIO.md](SAVIO.md).
+
 ## Build And Publish Your Own Image
 
 Use this only to publish a runtime different from the released image.
