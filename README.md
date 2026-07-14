@@ -29,6 +29,11 @@ docker compose down
 ```
 
 For running CARLA and CarlaMayo on Berkeley Savio, see [SAVIO.md](SAVIO.md).
+The Savio flow uses VS Code on the login node for editing and a separate
+terminal on the allocated compute node for CARLA and CarlaMayo.
+If you already have a running Savio GPU allocation and are on a Savio login
+node, [SAVIO.md](SAVIO.md) includes a one-shot command to reconnect to the
+assigned compute node without requesting another Slurm job.
 
 ## Build And Publish Your Own Image
 
@@ -64,7 +69,28 @@ Use this only to publish a runtime different from the released image.
    ./scripts/push_image.sh ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE:0.9.16
    ```
 
-5. To deploy your image on any machine, change the `image:` value in
+5. For Savio, build a prebuilt SIF on a Linux machine with Apptainer:
+
+   ```bash
+   ./scripts/build_sif.sh \
+     ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE:0.9.16 \
+     carla-sanramon.sif
+   ```
+
+   Log in to GHCR with a GitHub token that has `write:packages`, then push the
+   SIF as an ORAS artifact:
+
+   ```bash
+   apptainer registry login --username YOUR_GITHUB_USER oras://ghcr.io
+   ./scripts/push_sif.sh \
+     carla-sanramon.sif \
+     oras://ghcr.io/YOUR_GITHUB_USER/YOUR_IMAGE-sif:0.9.16
+   ```
+
+   Use the matching `oras://...` reference in [SAVIO.md](SAVIO.md). This lets
+   Savio pull the prebuilt SIF directly instead of converting the Docker image.
+
+6. To deploy your image on any machine with Docker, change the `image:` value in
    `docker-compose.yml` to your image reference, then run:
 
    ```bash

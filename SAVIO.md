@@ -1,84 +1,114 @@
-# CARLA and CarlaMayo on Berkeley Savio
+# Run CarlaMayo on Savio
 
-This runbook sets up and runs the CARLA server image and CarlaMayo on a Savio
-A40 node. Commands are grouped by where they run: local Mac, login node, or
-allocated compute node.
+This is the working procedure for running CARLA and CarlaMayo on a Savio A40
+node.
 
 ## Storage
 
-Use the home directory for small user-specific files, including SSH configuration,
-credentials, and the VS Code server:
+| Location                                           | Use                                     | Persists? |
+| -------------------------------------------------- | --------------------------------------- | --------- |
+| `/global/home/users/$USER/carla-stack-permanent` | Source code                            | Yes       |
+| `/global/scratch/users/$USER/carla-stack`        | CARLA image, `.venv`, logs, caches      | Temporary |
+| CUDA Apptainer image                               | CUDA, Python, and`flash-attn` runtime | Temporary |
 
-```text
-/global/home/users/nkiefer
-```
+Your source code is in home. CARLA's large image, Python environment, and run
+files are in scratch. The CUDA Apptainer image mounts the source directory from
+home; it does not contain your only copy of the code.
 
-Keep source code in a permanent home-directory workspace:
+## One-Time Mac Setup
 
-```text
-/global/home/users/nkiefer/carla-stack-permanent/
-    CarlaMayo/
-    sb1-workzone-berkeley-carla-server-image/
-```
+Run this on the Mac. Do this once.
 
-Use scratch only for large or temporary runtime files:
+### Mac Terminal 1: Set Up SSH
 
-```text
-/global/scratch/users/nkiefer/carla-stack/
-    containers/
-        carla-sanramon.sif
-    envs/
-        carlamayo/
-        carla2real/
-    cache/
-        apptainer/
-        huggingface/
-        uv/
-    data/
-    outputs/
-    logs/
-    tmp/
-```
+Use exactly this SSH layout:
 
-Scratch is temporary and is not backed up. Keep source code and anything that
-must survive cleanup in home or project storage.
+| Host alias     | Purpose                                 | Key                           |
+| -------------- | --------------------------------------- | ----------------------------- |
+| `savio-cert` | One-time bootstrap with the BRC cert    | `~/.ssh/ssh_certs/brc_cert` |
+| `savio`      | Normal terminal and VS Code connections | `~/.ssh/savio_vscode`       |
 
-## Connect
-
-On the local Mac, request a Berkeley SSH certificate:
+Do not add `ControlMaster`, `ControlPath`, or `ControlPersist` to `savio`.
+Those options can break VS Code's dynamic port forwarding.
 
 ```bash
 git clone https://github.com/lbnl-science-it/lrc-scripts.git
 cd lrc-scripts
-./request_cert.sh
+./request_cert.sh -p brc
+ssh-keygen -t ed25519 -f ~/.ssh/savio_vscode -C "$USER@$(hostname)-savio-vscode"
 ```
 
-The generated certificate is stored at:
+Add this to `~/.ssh/config`:
 
-```text
-/Users/nils/.ssh/ssh_certs/brc_cert
+```sshconfig
+Host savio-cert
+    User nkiefer
+    HostName hpc.brc.berkeley.edu
+    IdentityFile ~/.ssh/ssh_certs/brc_cert
+    IdentitiesOnly yes
+
+Host savio
+    User nkiefer
+    HostName hpc.brc.berkeley.edu
+    IdentityFile ~/.ssh/savio_vscode
+    IdentitiesOnly yes
+    AddKeysToAgent yes
+    UseKeychain yes
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
 ```
 
-Connect to the login node:
+Install the `savio` key using the `savio-cert` bootstrap login:
 
 ```bash
-ssh \
-  -i /Users/nils/.ssh/ssh_certs/brc_cert \
-  -l nkiefer \
-  hpc.brc.berkeley.edu
+ssh-copy-id -i ~/.ssh/savio_vscode.pub savio-cert
+ssh-add --apple-use-keychain ~/.ssh/savio_vscode
+ssh -o ControlMaster=no -o ControlPath=none -o PreferredAuthentications=publickey -o PasswordAuthentication=no savio true
+ssh savio
 ```
 
-## Clone the Repositories
+The `ControlMaster=no` and `PasswordAuthentication=no` command must exit
+successfully before VS Code is expected to work. It verifies a fresh
+public-key login without password auth or a reused SSH connection.
 
-Run this on the Savio login node. The repositories are small and belong in
-home, not scratch:
+If VS Code reports `Address already in use`, `Could not request local forwarding`, or `ControlSocket ... already exists`, close all VS Code windows
+connected to Savio and run this on the Mac:
+
+```bash
+ssh -O exit savio 2>/dev/null || true
+find ~/.ssh -maxdepth 1 -name 'control-*' -delete
+```
+
+## Every Run
+
+Follow these steps in order.
+
+### Mac Terminal 1: Connect to the Login Node
+
+Open a new Mac terminal and run:
+
+```bash
+ssh savio
+```
+
+The prompt should now look like:
+
+```text
+[nkiefer@ln001 ~]$
+```
+
+This is the login node. Do not run CARLA or CarlaMayo here.
+
+### Savio Login Node: Check the Source Code
+
+Run this on the login node. This is only needed the first time:
 
 ```bash
 export PROJECT="$HOME/carla-stack-permanent"
 mkdir -p "$PROJECT"
 
 if [ -d "$PROJECT/CarlaMayo/.git" ]; then
-  echo "CarlaMayo already exists: $PROJECT/CarlaMayo"
+  echo "CarlaMayo already cloned"
 else
   test ! -e "$PROJECT/CarlaMayo"
   git clone https://github.berkeley.edu/nkiefer/CarlaMayo.git \
@@ -86,7 +116,7 @@ else
 fi
 
 if [ -d "$PROJECT/sb1-workzone-berkeley-carla-server-image/.git" ]; then
-  echo "CARLA image repository already exists: $PROJECT/sb1-workzone-berkeley-carla-server-image"
+  echo "CARLA image repository already cloned"
 else
   test ! -e "$PROJECT/sb1-workzone-berkeley-carla-server-image"
   git clone https://github.com/nilskiefer/sb1-workzone-berkeley-carla-server-image.git \
@@ -94,28 +124,13 @@ else
 fi
 ```
 
-The Berkeley Enterprise GitHub clone prompts for a username and password. Use
-your GitHub username and a GitHub personal access token as the password. Paste
-the token only at the `Password` prompt; do not enter it as a shell command.
-The public image repository does not require authentication.
+For the Berkeley Enterprise GitHub prompt, enter your GitHub username and use
+a personal access token as the password. Paste the token only at the password
+prompt.
 
-Verify the persistent checkout before requesting a compute node:
+### Savio Login Node: Request the GPU Node
 
-```bash
-test -f "$PROJECT/CarlaMayo/carla_alpamayo_closed_loop.py" \
-  && echo "CarlaMayo checkout verified"
-test -f "$PROJECT/sb1-workzone-berkeley-carla-server-image/README.md" \
-  && echo "CARLA image repository checkout verified"
-```
-
-If either destination already exists, do not run `git clone` again. The
-`destination path already exists and is not an empty directory` message means
-that repository is already cloned. Verify it with the two `test` commands
-above and continue.
-
-## Request Two A40 GPUs
-
-Run this from the login node:
+Run this on the login node:
 
 ```bash
 srun \
@@ -131,225 +146,127 @@ srun \
   --pty bash -i
 ```
 
-For one A40 instead, use:
+Wait. The prompt must change to a compute node, for example:
 
-```bash
-srun \
-  --account=fc_workzone \
-  --partition=savio3_gpu \
-  --qos=a40_gpu3_normal \
-  --gres=gpu:A40:1 \
-  --nodes=1 \
-  --ntasks=1 \
-  --cpus-per-task=8 \
-  --time=04:00:00 \
-  --exclude=n0215.savio3 \
-  --pty bash -i
+```text
+[nkiefer@n0274 ~]$
 ```
 
-Keep the terminal open for the lifetime of the allocation.
-
-After Slurm assigns a node, the prompt changes from the login node to a compute
-node such as `nkiefer@n0216`
+Do not continue until the prompt contains `n....savio3`.
 
 Verify the allocation:
 
 ```bash
 hostname
 echo "$SLURM_JOB_ID"
-echo "$CUDA_VISIBLE_DEVICES"
 nvidia-smi -L
-nvidia-smi
 ```
 
-```bash
-squeue -j "$SLURM_JOB_ID"
-squeue -u "$USER"
-```
+Keep this terminal open to hold the Slurm allocation. Use a second terminal for
+the actual CARLA and CarlaMayo work.
 
-## Reconnect to an Existing Allocation
+### Savio Login Node: Open Prepared Compute Terminal
 
-You can use a new local terminal without requesting another node. First SSH
-to the login node as usual, then find the running job:
-
-```bash
-squeue -u "$USER"
-```
-
-Use the node shown in the `NODELIST` column. The original terminal and its
-running processes remain active. If the job is no longer listed as `R`, it has
-ended and cannot be re-entered.
-
-After reconnecting, restore the environment variables for that shell:
+Run this from a Savio login-node shell in each working terminal. It finds the
+existing GPU allocation, connects to its compute node, initializes the runtime
+variables, prepares the scratch directories, pulls missing runtime images, and
+then opens an interactive compute-node shell:
 
 ```bash
-export WORK="/global/scratch/users/$USER/carla-stack"
-export PROJECT="$HOME/carla-stack-permanent"
-export SIF="$WORK/containers/carla-sanramon.sif"
-export DEV_SIF="$WORK/containers/cuda-12.8.2-devel-ubuntu22.04.sif"
-export APPTAINER_CACHEDIR="$WORK/cache/apptainer"
-export APPTAINER_TMPDIR="$WORK/tmp/apptainer"
-export HF_HOME="$WORK/cache/huggingface"
-export UV_CACHE_DIR="$WORK/cache/uv"
-cd "$PROJECT/CarlaMayo"
-```
-
-Only source the Python environment after the setup section has completed:
-
-```bash
-source "$WORK/envs/carlamayo/bin/activate"
-```
-
-Do not run the GPU `srun` request again when reconnecting; that would request a
-second allocation. You can also simply keep using the original terminal.
-
-If you are already at a Savio login-node prompt such as `ln002`, connect to the
-existing node directly with one command:
-
-```bash
-nodes=$(squeue -h -u "$USER" -t RUNNING -o "%N|%P" | awk -F'|' '$2 == "savio3_gpu" {print $1}' | sort -u); count=$(printf "%s\n" "$nodes" | sed "/^$/d" | wc -l | tr -d " "); if [ "$count" -ne 1 ]; then echo "Expected exactly one running savio3_gpu node; found $count." >&2; squeue -u "$USER"; exit 1; fi; node=$(printf "%s\n" "$nodes" | sed "/^$/d"); echo "Connecting to $node"; exec ssh "$node"
-```
-
-If the prompt changes to `>` and does not execute, press `Ctrl-C`. That means
-the shell received an unmatched quote or an unfinished line. Paste the single
-line above again; it has no trailing quote.
-
-This connects directly to the node assigned to exactly one running A40
-allocation. It does not create another Slurm job step.
-
-## Set Up the Workspace
-
-The repositories are in `$PROJECT` on home. Scratch is only for the CARLA
-container, Python environment, caches, logs, and run outputs.
-
-Create the temporary runtime directories:
-
-```bash
-mkdir -p "/global/scratch/users/$USER/carla-stack"
-```
-
-```bash
-export WORK="/global/scratch/users/$USER/carla-stack"
-export PROJECT="$HOME/carla-stack-permanent"
-export SIF="$WORK/containers/carla-sanramon.sif"
-export APPTAINER_CACHEDIR="$WORK/cache/apptainer"
-export APPTAINER_TMPDIR="$WORK/tmp/apptainer"
-export HF_HOME="$WORK/cache/huggingface"
-export UV_CACHE_DIR="$WORK/cache/uv"
-```
-
-Create the runtime subdirectories and move into scratch. The prompt should
-then show the scratch path:
-
-```bash
-mkdir -p \
-  "$WORK/containers" \
-  "$WORK/envs" \
-  "$WORK/cache/apptainer" \
-  "$WORK/cache/huggingface" \
-  "$WORK/cache/uv" \
-  "$WORK/data" \
-  "$WORK/outputs" \
-  "$WORK/logs" \
-  "$WORK/tmp/apptainer"
-
-cd "$WORK"
-pwd
-```
-
-Pull the published CARLA image as a local SIF file:
-
-```bash
-if [ -f "$SIF" ]; then
-  echo "CARLA image already exists: $SIF"
-else
-  apptainer pull "$SIF" \
-    docker://ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image:0.9.16-sanramon
+nodes=$(squeue -h -u "$USER" -t RUNNING -o "%N|%P" \
+  | awk -F'|' '$2 == "savio3_gpu" {print $1}' \
+  | sort -u)
+count=$(printf "%s\n" "$nodes" | sed "/^$/d" | wc -l | tr -d " ")
+if [ "$count" -ne 1 ]; then
+  echo "Expected exactly one running savio3_gpu node; found $count." >&2
+  squeue -u "$USER"
+  exit 1
 fi
+node=$(printf "%s\n" "$nodes" | sed "/^$/d")
+echo "Connecting to $node"
+exec ssh -t "$node" 'bash -l -c "
+  export WORK=\"/global/scratch/users/\$USER/carla-stack\"
+  export PROJECT=\"\$HOME/carla-stack-permanent\"
+  export SIF=\"\$WORK/containers/carla-sanramon.sif\"
+  export SIF_ORAS=\"oras://ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image-sif:0.9.16-sanramon\"
+  export DEV_SIF=\"\$WORK/containers/cuda-12.8.2-devel-ubuntu22.04.sif\"
+  export HF_HOME=\"\$WORK/cache/huggingface\"
+  export UV_CACHE_DIR=\"\$WORK/cache/uv\"
+  export UV_PROJECT_ENVIRONMENT=\"\$WORK/envs/carlamayo\"
+  export UV_LINK_MODE=hardlink
+  export APPTAINER_CACHEDIR=\"\$WORK/cache/apptainer\"
+  export APPTAINER_TMPDIR=\"\$WORK/tmp/apptainer\"
+
+  mkdir -p \
+    \"\$WORK/containers\" \
+    \"\$WORK/cache/apptainer\" \
+    \"\$WORK/cache/huggingface\" \
+    \"\$WORK/cache/uv\" \
+    \"\$WORK/envs\" \
+    \"\$WORK/logs\" \
+    \"\$WORK/outputs\" \
+    \"\$WORK/tmp/apptainer\"
+
+  if [ -f \"\$SIF\" ]; then
+    echo \"CARLA image already exists\"
+  else
+    apptainer pull \"\$SIF\" \"\$SIF_ORAS\"
+  fi
+
+  if [ -f \"\$DEV_SIF\" ]; then
+    echo \"CUDA development image already exists\"
+  else
+    apptainer pull \"\$DEV_SIF\" docker://nvidia/cuda:12.8.2-devel-ubuntu22.04
+  fi
+
+  apptainer exec \"\$SIF\" test -x /workspace/CarlaUE4.sh
+  apptainer exec \"\$DEV_SIF\" /bin/bash -lc \"nvcc --version\"
+
+  cd \"\$PROJECT\"
+  cat > \"\$WORK/tmp/compute-bashrc\" <<'\''EOF'\''
+export PS1='\''[compute:\h \W]\$ '\''
+alias ll='\''ls -lh'\''
+alias la='\''ls -lah'\''
+EOF
+  exec bash --rcfile \"\$WORK/tmp/compute-bashrc\" -i
+"'
 ```
+
+After publishing a new `0.9.16-sanramon` image, remove the old SIF before
+running the prepared terminal block:
 
 ```bash
-ls -lh "$SIF"
+rm -f /global/scratch/users/$USER/carla-stack/containers/carla-sanramon.sif
 ```
 
-Pull a CUDA development image for building `flash-attn`. The CARLA image is a
-runtime image and does not contain `nvcc`.
+Publish the Savio SIF directly to GHCR as an ORAS artifact. From a Linux
+machine with Apptainer, build the SIF from the already-built Docker image:
 
 ```bash
-if [ -f "$DEV_SIF" ]; then
-  echo "CUDA development image already exists: $DEV_SIF"
-else
-  apptainer pull "$DEV_SIF" \
-    docker://nvidia/cuda:12.8.2-devel-ubuntu22.04
-fi
-
-apptainer exec "$DEV_SIF" nvcc --version
+./scripts/build_sif.sh \
+  ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image:0.9.16-sanramon \
+  carla-sanramon.sif
 ```
 
-Set up the Python environment inside the CUDA development image. The Savio
-host has glibc 2.28, while the CARLA 0.9.16 Python wheel requires glibc 2.31.
-The project installs the matching wheel from PyPI inside the CUDA image.
+Log in to GHCR with a GitHub token that has `write:packages`, then push the SIF:
 
 ```bash
-test -f "$PROJECT/CarlaMayo/carla_alpamayo_closed_loop.py" \
-  && echo "CarlaMayo controller verified"
-
-command -v uv >/dev/null 2>&1 || {
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-}
-
-if [ -d "$WORK/envs/carlamayo" ] && [ ! -x "$WORK/envs/carlamayo/bin/python" ]; then
-  mv "$WORK/envs/carlamayo" "$WORK/envs/carlamayo-failed"
-fi
-
-apptainer exec --nv \
-  --bind "$PROJECT:$PROJECT" \
-  --bind "$WORK:$WORK" \
-  --env PROJECT="$PROJECT" \
-  --env WORK="$WORK" \
-  "$DEV_SIF" \
-  bash -lc '
-    export PATH="$HOME/.local/bin:$PATH"
-    export CUDA_HOME=/usr/local/cuda
-    export PATH="$CUDA_HOME/bin:$PATH"
-    cd "$PROJECT/CarlaMayo"
-    uv venv "$WORK/envs/carlamayo" --python 3.12
-    UV_PROJECT_ENVIRONMENT="$WORK/envs/carlamayo" uv sync \
-      --locked \
-      --active \
-      --python-platform x86_64-manylinux_2_31
-  '
+apptainer registry login --username YOUR_GITHUB_USER oras://ghcr.io
+./scripts/push_sif.sh \
+  carla-sanramon.sif \
+  oras://ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image-sif:0.9.16-sanramon
 ```
 
-Authenticate for Alpamayo model downloads after the environment is installed:
+If the SIF is already present, the prepared terminal block prints
+`CARLA image already exists`. If it is missing, the prepared terminal pulls the
+prebuilt SIF from `oras://ghcr.io/...-sif`. This avoids the slow `docker://`
+layer extraction and SIF conversion on Savio. Treat `FATAL:`, a missing SIF, or
+a failed validation command as a real failure.
 
-```bash
-apptainer exec --nv \
-  --bind "$PROJECT:$PROJECT" \
-  --bind "$WORK:$WORK" \
-  --env PROJECT="$PROJECT" \
-  --env WORK="$WORK" \
-  "$DEV_SIF" \
-  bash -lc '
-    export PATH="$HOME/.local/bin:$PATH"
-    source "$WORK/envs/carlamayo/bin/activate"
-    hf auth login
-  '
-```
+### Compute Node Terminal 2: Run CARLA Server
 
-Follow the Hugging Face model access requirements for
-`nvidia/Alpamayo-1.5-10B` when prompted.
-
-## Start CARLA
-
-Verify the CARLA launcher in the Apptainer image:
-
-```bash
-apptainer exec "$SIF" test -x /workspace/CarlaUE4.sh
-```
-
-Start CARLA:
+Open a separate prepared compute-node terminal for CARLA. Run CARLA in the
+foreground so the terminal is the server lifecycle:
 
 ```bash
 apptainer exec \
@@ -365,29 +282,24 @@ apptainer exec \
     -FullStdOutLogOutput \
     -carla-rpc-port=2000 \
     -quality-level=Epic \
-  > "$WORK/logs/carla-${SLURM_JOB_ID}.log" 2>&1 &
-export CARLA_PID=$!
-echo "CARLA PID: $CARLA_PID"
 ```
 
-Check that CARLA is ready:
+Leave this terminal occupied by CARLA. Stop the server with `Ctrl-C`.
 
-```bash
-sleep 30
-ps -p "$CARLA_PID"
-bash -c '</dev/tcp/127.0.0.1/2000' \
-  && echo "CARLA is ready" \
-  || echo "CARLA is not ready"
-tail -n 50 "$WORK/logs/carla-${SLURM_JOB_ID}.log"
-nvidia-smi
-```
+## VS Code
 
-CARLA runs through Apptainer on Savio. Do not use Docker commands on the
-compute node.
+### VS Code: Open CarlaMayo
 
-## Run CarlaMayo
+1. Install **Remote - SSH** in VS Code.
+2. Run **Remote-SSH: Connect to Host...** and select `savio`.
+3. Open `/global/home/users/$USER/carla-stack-permanent/CarlaMayo`.
 
-Run CarlaMayo inside the CUDA development image used to install its environment:
+Use VS Code on the login node only for editing source files in home. Do not run
+CARLA, CarlaMayo, Python package installs, or Dev Containers on the login node.
+
+### Compute Node Terminal 3: Enter CarlaMayo Container
+
+Open another prepared compute-node terminal for CarlaMayo. Run this there:
 
 ```bash
 apptainer exec --nv \
@@ -395,103 +307,70 @@ apptainer exec --nv \
   --bind "$WORK:$WORK" \
   --env PROJECT="$PROJECT" \
   --env WORK="$WORK" \
+  --env HF_HOME="$HF_HOME" \
+  --env UV_CACHE_DIR="$UV_CACHE_DIR" \
+  --env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
+  --env UV_LINK_MODE="$UV_LINK_MODE" \
+  --env PS1='[carla-container \W]\$ ' \
   "$DEV_SIF" \
-  bash -lc '
-    export PATH="$HOME/.local/bin:$PATH"
-    export CUDA_HOME=/usr/local/cuda
-    export PATH="$CUDA_HOME/bin:$PATH"
-    source "$WORK/envs/carlamayo/bin/activate"
-    cd "$PROJECT/CarlaMayo"
-    which python
-    python --version
-    python -c "
-import torch
-print(\"CUDA available:\", torch.cuda.is_available())
-print(\"GPU count:\", torch.cuda.device_count())
-"
-  '
+  /bin/bash --noprofile --norc -i
 ```
+
+Run the rest of the CarlaMayo commands inside that container shell. Do not run
+them in the host compute-node shell.
+
+### Apptainer Container: Create or Update CarlaMayo Environment
+
+This reuses the existing scratch venv. It creates the venv only if it does not
+exist, then syncs missing or changed packages from the lockfile:
 
 ```bash
-apptainer exec --nv \
-  --bind "$PROJECT:$PROJECT" \
-  --bind "$WORK:$WORK" \
-  --env PROJECT="$PROJECT" \
-  --env WORK="$WORK" \
-  "$DEV_SIF" \
-  bash -lc '
-    export PATH="$HOME/.local/bin:$PATH"
-    export CUDA_HOME=/usr/local/cuda
-    export PATH="$CUDA_HOME/bin:$PATH"
-    source "$WORK/envs/carlamayo/bin/activate"
-    cd "$PROJECT/CarlaMayo"
-    python -u carla_alpamayo_closed_loop.py \
-      --controller-mode mpc \
-      --route-conditioned \
-      --route-trajectory carla_data/examples/SanRamon_highway_work_zone.json \
-      --inference-interval-frames 10 \
-      --initial-speed-kph 3.6 \
-      --npc-vehicles 100 \
-      --npc-walkers 0 \
-      --duration-sec 100 \
-      --quantization
-  '
+export CUDA_HOME=/usr/local/cuda
+export PATH="$HOME/.local/bin:$CUDA_HOME/bin:$PATH"
+cd "$PROJECT/CarlaMayo"
+command -v uv
+test -n "$UV_PROJECT_ENVIRONMENT"
+
+if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
+  uv venv "$UV_PROJECT_ENVIRONMENT" --python 3.12
+fi
+
+source "$UV_PROJECT_ENVIRONMENT/bin/activate"
+uv sync --locked --active --python-platform x86_64-manylinux_2_31
 ```
 
-## Monitor
+Authenticate for model downloads:
 
 ```bash
-watch -n 1 nvidia-smi
+hf auth login
 ```
+
+Check the GPU and CARLA connection:
 
 ```bash
-sinfo -N \
-  -p savio3_gpu \
-  -O NodeList:20,StateCompact:10,Gres:32,GresUsed:32 \
-  | grep -E 'NODELIST|A40'
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count())"
+python -c "import carla; c=carla.Client('127.0.0.1', 2000); c.set_timeout(5); print(c.get_server_version())"
 ```
 
-`idle` nodes are unused. `mix` nodes are partially allocated and may still have
-an available GPU. `alloc`, `down`, and `drain` nodes may not be available.
+### Apptainer Container: Run CarlaMayo
 
-## Connect VS Code
-
-Add the login node and the allocated compute node to the local SSH config:
-
-```sshconfig
-Host savio
-    User nkiefer
-    HostName hpc.brc.berkeley.edu
-    IdentityFile /Users/nils/.ssh/ssh_certs/brc_cert
-    IdentitiesOnly yes
-
-Host savio-compute
-    User nkiefer
-    HostName n0275.savio3
-    ProxyJump savio
-    StrictHostKeyChecking no
-```
-
-Update `HostName` for `savio-compute` whenever Slurm assigns a different node:
+Run CarlaMayo:
 
 ```bash
-hostname
+python -u carla_alpamayo_closed_loop.py \
+  --controller-mode mpc \
+  --route-conditioned \
+  --route-trajectory carla_data/examples/SanRamon_highway_work_zone.json \
+  --inference-interval-frames 10 \
+  --initial-speed-kph 3.6 \
+  --npc-vehicles 100 \
+  --npc-walkers 0 \
+  --duration-sec 100 \
 ```
 
-Then open this directory through VS Code Remote SSH:
+## End the Run
 
-```text
-/global/home/users/nkiefer/carla-stack-permanent/CarlaMayo
-```
-
-## End the Session
-
-```bash
-kill "$CARLA_PID"
-wait "$CARLA_PID" 2>/dev/null
-exit
-```
-
-The interactive allocation ends when the shell exits. Source code under home
-remains available. Scratch files are temporary and are not backed up, so copy
-important model outputs to home or project storage before ending the session.
+Stop CARLA with `Ctrl-C` in the CARLA server terminal. Exit any CarlaMayo
+container shells, then exit the original `srun` allocation terminal. Source
+code remains in home. The `.venv` and scratch files may be removed and are not
+backed up.
