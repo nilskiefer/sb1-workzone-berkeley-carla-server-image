@@ -19,6 +19,10 @@ ENV NVIDIA_VISIBLE_DEVICES="all"
 
 # RUNTIME_LAYERS
 
+RUN chmod a+x \
+        /workspace/CarlaUE4.sh \
+        /workspace/CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping
+
 USER carla
 
 EXPOSE 2000-2002 8000
