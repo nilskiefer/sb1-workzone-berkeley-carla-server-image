@@ -10,6 +10,14 @@ WORKDIR /workspace
 RUN packages='libsdl2-2.0 xserver-xorg libvulkan1 libomp5 xdg-user-dirs tar' \
     && apt-get update \
     && apt-get install -y --no-install-recommends $packages \
+    && install -d /etc/vulkan/icd.d \
+    && printf '%s\n' \
+        '{' \
+        '  "file_format_version": "1.0.0",' \
+        '  "ICD": {' \
+        '    "library_path": "libGLX_nvidia.so.0"' \
+        '  }' \
+        '}' > /etc/vulkan/icd.d/nvidia_icd.json \
     && rm -rf /var/lib/apt/lists/*
 
 ENV OMP_PROC_BIND="FALSE"
