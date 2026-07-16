@@ -330,7 +330,8 @@ else
     --env OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK" \
     --pwd /workspace \
     "$SIF" \
-    ./CarlaUE4.sh \
+    ./CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping \
+      CarlaUE4 \
       -RenderOffScreen \
       -nosound \
       -stdout \
@@ -339,6 +340,10 @@ else
       -quality-level=Epic
 fi
 ```
+
+The SIF filesystem is read-only.  Invoke the shipping binary directly rather
+than `./CarlaUE4.sh`: that wrapper runs `chmod +x` on the binary at startup,
+which fails inside a SIF even though the binary is already executable.
 
 Leave this terminal occupied by CARLA. Stop the server with `Ctrl-C`.
 

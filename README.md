@@ -35,6 +35,26 @@ If you already have a running Savio GPU allocation and are on a Savio login
 node, [SAVIO.md](SAVIO.md) includes a one-shot command to reconnect to the
 assigned compute node without requesting another Slurm job.
 
+## Run the SIF on an Apptainer Host
+
+Pull the published SIF to a location with at least 35 GB available, then use
+the SIF launcher. The second argument is a writable directory for CARLA's
+saved data and temporary files.
+
+```bash
+export APPTAINER_CACHEDIR=/path/with-space/apptainer-cache
+export APPTAINER_TMPDIR=/path/with-space/apptainer-tmp
+mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
+
+apptainer pull carla-sanramon.sif \
+  oras://ghcr.io/nilskiefer/sb1-workzone-berkeley-carla-server-image-sif:0.9.16-sanramon
+./scripts/run_sif.sh carla-sanramon.sif /path/with-space/carla-runtime
+```
+
+The launcher intentionally invokes the CARLA shipping binary instead of
+`CarlaUE4.sh`: the wrapper attempts to change file permissions, which is not
+possible in a read-only SIF.
+
 ## Build And Publish Your Own Image
 
 Use this only to publish a runtime different from the released image.
