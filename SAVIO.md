@@ -127,10 +127,11 @@ prompt.
 
 ### Savio Login Node: Install Codex CLI Once
 
-This installs the Node and Codex executables in `$WORK/tools/codex-cli`. The
-Codex sign-in state remains in persistent `~/.codex`, so reinstalling the
-executables after scratch cleanup does not require another sign-in. Run it on a
-login node, not inside a GPU allocation. 
+This installs the Node and Codex executables in `$WORK/tools/codex-cli`. Codex
+sign-in state remains in persistent `~/.codex`, while its SQLite state uses
+node-local `/tmp/$USER/codex-sqlite`: Savio home storage does not support the
+SQLite locking Codex requires. Run it on a login node, not inside a GPU
+allocation.
 
 ```bash
 node_version=v24.18.0
@@ -142,6 +143,7 @@ archive="$HOME/.local/$node_dir.tar.xz"
 checksums="$HOME/.local/SHASUMS256.txt"
 temporary_root="$install_root/.${node_dir}.$$"
 path_line='export PATH="/global/scratch/users/$USER/carla-stack/tools/codex-cli/node-v24.18.0-linux-x64/bin:/global/scratch/users/$USER/carla-stack/tools/codex-cli/codex/bin:$PATH"'
+sqlite_line='export CODEX_SQLITE_HOME="/tmp/$USER/codex-sqlite"'
 
 mkdir -p "$install_root"
 
@@ -174,11 +176,15 @@ if [ ! -x "$node_root/bin/node" ]; then
 fi
 
 if [ -x "$node_root/bin/node" ]; then
-  export PATH="$node_root/bin:$PATH"
+  export PATH="$node_root/bin:$install_root/codex/bin:$PATH"
+  export CODEX_SQLITE_HOME="/tmp/$USER/codex-sqlite"
+  mkdir -p "$CODEX_SQLITE_HOME"
   npm install --global --prefix "$install_root/codex" @openai/codex
 
   grep -qxF "$path_line" "$HOME/.bashrc" 2>/dev/null || \
     printf '\n%s\n' "$path_line" >> "$HOME/.bashrc"
+  grep -qxF "$sqlite_line" "$HOME/.bashrc" 2>/dev/null || \
+    printf '%s\n' "$sqlite_line" >> "$HOME/.bashrc"
 
   "$install_root/codex/bin/codex" --version
 else
@@ -187,8 +193,8 @@ fi
 ```
 
 Open a new Savio shell after this block, then run `codex` from the directory
-you want it to work in. Codex stores its sign-in state in `~/.codex`, which is
-in persistent home storage.
+you want it to work in. `~/.codex` retains the sign-in state; the SQLite state
+in `/tmp/$USER/codex-sqlite` is recreated automatically on each Savio node.
 
 ### Savio Login Node: Request the GPU Node
 
