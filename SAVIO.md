@@ -456,6 +456,21 @@ python -u carla_alpamayo_closed_loop.py \
   --duration-sec 100
 ```
 
+```bash
+  python -u carla_alpamayo_closed_loop.py \
+    --controller-mode mpc \
+    --route-conditioned \
+    --route-trajectory carla_data/examples/SanRamon_highway_work_zone.json \
+    --inference-interval-sec 0.1 \
+    --initial-speed-kph 3.6 \
+    --npc-vehicles 0 \
+    --npc-walkers 0 \
+    --duration-sec 60 \
+    --use-carla2real \
+    --carla2real-checkpoint "$WORK/models/carla2real/REGEN/carla2nuscenes.pth" \
+    --carla2real-device cuda:1
+```
+
 ## End the Run
 
 Stop CARLA with `Ctrl-C` in the CARLA server terminal. Exit any CarlaMayo
